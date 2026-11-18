@@ -1,0 +1,13 @@
+{
+  "id": "superpowers",
+  "name": "Superpowers",
+  "summary": "Brainstorming, plan-before-code, red-green-refactor TDD, and systematic debugging workflows.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/superpowers/SKILL.md"},
+    {"src": "brainstorming.md", "dest": ".cursor/skills/superpowers/brainstorming.md"},
+    {"src": "test-driven-development.md", "dest": ".cursor/skills/superpowers/test-driven-development.md"},
+    {"src": "systematic-debugging.md", "dest": ".cursor/skills/superpowers/systematic-debugging.md"},
+    {"src": "rules/superpowers.mdc", "dest": ".cursor/rules/superpowers.mdc"}
+  ]
+}

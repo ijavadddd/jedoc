@@ -1,0 +1,10 @@
+{
+  "id": "founder-skill",
+  "name": "Founder Skill",
+  "summary": "Product strategy, scope cuts, edge-case discovery, and PRD refinement before engineering starts.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/founder-skill/SKILL.md"},
+    {"src": "rules/founder-skill.mdc", "dest": ".cursor/rules/founder-skill.mdc"}
+  ]
+}

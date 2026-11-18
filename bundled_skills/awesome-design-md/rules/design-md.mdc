@@ -1,0 +1,14 @@
+---
+description: Keep UI work consistent with the workspace DESIGN.md tokens, components, and accessibility bar.
+globs: "**/*.{tsx,ts,css,jsx,vue,svelte,html}"
+alwaysApply: false
+---
+
+# Design MD
+
+- Read `DESIGN.md` before adding or restyling UI.
+- Use the documented tokens. Do not introduce one-off colors, radii, or fonts in feature code.
+- Extend `DESIGN.md` in the same change when a new component or token is genuinely required.
+- Pair every status color with a text label.
+- Preserve visible keyboard focus, accessible names, and AA contrast.
+- Provide empty, loading, and error states for any view that fetches data.

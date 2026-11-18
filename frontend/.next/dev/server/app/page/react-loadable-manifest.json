@@ -1,0 +1,14 @@
+{
+  "[project]/src/App.tsx [app-client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/src/App.tsx [app-client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/src_1-3szlzq2kwf7._.js",
+      "static/chunks/node_modules_tailwind-merge_dist_bundle-mjs_mjs_0q79z23r57r2s._.js",
+      "static/chunks/node_modules_@xterm_xterm_lib_xterm_0yjec7di872pe.js",
+      "static/chunks/node_modules_@xyflow_system_dist_esm_index_0sij84bnhxpa-.js",
+      "static/chunks/node_modules_@xyflow_react_dist_esm_index_1yft1n8-1msd9.js",
+      "static/chunks/node_modules_1b756oqv_tcl4._.js",
+      "static/chunks/node_modules_0cargb4yu0a9u._.css"
+    ]
+  }
+}

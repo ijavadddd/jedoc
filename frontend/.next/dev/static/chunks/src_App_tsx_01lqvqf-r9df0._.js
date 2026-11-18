@@ -1,0 +1,28 @@
+(globalThis["TURBOPACK"] || (globalThis["TURBOPACK"] = [])).push([typeof document === "object" ? document.currentScript : undefined,
+"[project]/src/App.tsx [app-client] (ecmascript, next/dynamic entry, async loader)", ((__turbopack_context__) => {
+
+__turbopack_context__.v((parentImport) => {
+    return Promise.all([
+  "static/chunks/src_1-3szlzq2kwf7._.js",
+  "static/chunks/node_modules_tailwind-merge_dist_bundle-mjs_mjs_0q79z23r57r2s._.js",
+  "static/chunks/node_modules_@xterm_xterm_lib_xterm_0yjec7di872pe.js",
+  "static/chunks/node_modules_@xyflow_system_dist_esm_index_0sij84bnhxpa-.js",
+  "static/chunks/node_modules_@xyflow_react_dist_esm_index_1yft1n8-1msd9.js",
+  "static/chunks/node_modules_1b756oqv_tcl4._.js",
+  {
+    "path": "static/chunks/node_modules_0cargb4yu0a9u._.css",
+    "included": [
+      "[project]/node_modules/@xterm/xterm/css/xterm.css [app-client] (css)",
+      "[project]/node_modules/@xyflow/react/dist/style.css [app-client] (css)"
+    ],
+    "moduleChunks": [
+      "static/chunks/node_modules_@xterm_xterm_css_xterm_css_1igg3k2-ikub5._.single.css",
+      "static/chunks/node_modules_@xyflow_react_dist_style_css_1igg3k2-ikub5._.single.css"
+    ]
+  }
+].map((chunk) => __turbopack_context__.l(chunk))).then(() => {
+        return parentImport("[project]/src/App.tsx [app-client] (ecmascript, next/dynamic entry)");
+    });
+});
+}),
+]);

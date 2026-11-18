@@ -1,0 +1,13 @@
+---
+description: Enforce modular structure, honest names, and deletion of dead code in implementation and review.
+alwaysApply: false
+---
+
+# Ponytail hygiene
+
+- Keep each module to a single responsibility. Split files whose description needs "and".
+- Delete unused code, commented-out blocks, and pass-through wrappers in the files you touch.
+- Name types and functions with the PRD's domain language.
+- Keep I/O at the edges so core logic stays unit-testable.
+- Do not reformat or refactor unrelated modules.
+- Concurrency control (version, lock, idempotency key) must be visible at the write site.

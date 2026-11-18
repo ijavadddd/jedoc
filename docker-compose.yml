@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      JEDOC_DATA_DIR: /app/data
+      JEDOC_BUNDLED_SKILLS: /app/bundled_skills
+      JEDOC_EXECUTION_MODE: ${JEDOC_EXECUTION_MODE:-auto}
+      JEDOC_QA_DURATION_S: ${JEDOC_QA_DURATION_S:-}
+      JEDOC_DEFAULT_MODEL: ${JEDOC_DEFAULT_MODEL:-}
+      JEDOC_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    volumes:
+      - ./data:/app/data
+      - ./bundled_skills:/app/bundled_skills:ro
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      JEDOC_API_PROXY: http://backend:8000
+    depends_on:
+      - backend

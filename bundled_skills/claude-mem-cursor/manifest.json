@@ -1,0 +1,20 @@
+{
+  "id": "claude-mem-cursor",
+  "name": "Claude Mem",
+  "summary": "Local SQLite memory MCP plus a Cursor rule for cross-session engineering decisions and bug post-mortems.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/claude-mem-cursor/SKILL.md"},
+    {"src": "rules/claude-mem.mdc", "dest": ".cursor/rules/claude-mem.mdc"},
+    {"src": "server.py", "dest": ".cursor/skills/claude-mem-cursor/server.py"}
+  ],
+  "mcp": {
+    "server_name": "jedoc-claude-mem",
+    "command": "python3",
+    "args": [".cursor/skills/claude-mem-cursor/server.py"],
+    "absolute_args": true,
+    "env": {
+      "JEDOC_MEMORY_DB": ".cursor/claude-mem.sqlite"
+    }
+  }
+}

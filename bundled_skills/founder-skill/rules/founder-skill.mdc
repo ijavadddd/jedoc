@@ -1,0 +1,13 @@
+---
+description: Apply founder-level scope, scale, and edge-case judgment when refining a PRD or implementation plan.
+alwaysApply: false
+---
+
+# Founder judgment
+
+- Do not start coding while the PRD still hides scale assumptions or non-goals.
+- Challenge requirements that need a hot row, a global lock, or an unbounded synchronous fan-out.
+- Write numbers: concurrency, write rate, latency budget, retention. Qualitative words like "scalable" are not requirements.
+- Record explicit non-goals so later agents do not silently expand scope.
+- Prefer a smaller contract that survives duplicate requests and partial failure.
+- Keep the optimized PRD testable: each requirement maps to a behavior an automated test can refuse.

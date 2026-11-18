@@ -1,0 +1,13 @@
+---
+description: Require a written plan, red-green-refactor TDD, and evidence-based debugging.
+alwaysApply: false
+---
+
+# Superpowers
+
+- Do not change production behavior without a failing test that names that behavior.
+- Confirm the test fails for the right reason before implementing.
+- Refactor only while the relevant tests are green.
+- Debug from one stated hypothesis and a predicted observation.
+- Do not relax assertions or delete tests to force a pass.
+- Keep the change inside the files the plan named.

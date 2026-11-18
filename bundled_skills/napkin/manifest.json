@@ -1,0 +1,10 @@
+{
+  "id": "napkin",
+  "name": "Napkin",
+  "summary": "Rapid architectural sketches, Mermaid diagrams, data-flow blueprints, and schema or API contracts.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/napkin/SKILL.md"},
+    {"src": "rules/napkin.mdc", "dest": ".cursor/rules/napkin.mdc"}
+  ]
+}

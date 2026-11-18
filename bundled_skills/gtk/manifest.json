@@ -1,0 +1,10 @@
+{
+  "id": "gtk",
+  "name": "GTK",
+  "summary": "Git hygiene, test-runner orchestration, fixtures, and CI or environment checks.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/gtk/SKILL.md"},
+    {"src": "rules/gtk.mdc", "dest": ".cursor/rules/gtk.mdc"}
+  ]
+}

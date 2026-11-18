@@ -1,0 +1,13 @@
+---
+description: Require an explicit architecture sketch and contracts before treating a design as ready to implement.
+alwaysApply: false
+---
+
+# Napkin sketches
+
+- Include a Mermaid diagram for the hot path and the write path before implementation.
+- Name the single owner of each piece of durable state.
+- Put idempotency, pagination, and error codes on the API contract, not in a follow-up.
+- Label sync versus async edges.
+- Call out hot rows, cross-partition transactions, and N+1 reads on the diagram itself.
+- Store money and quantities as integers or exact decimals, never binary floats.

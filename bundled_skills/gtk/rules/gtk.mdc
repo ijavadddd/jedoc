@@ -1,0 +1,13 @@
+---
+description: Keep git history, test commands, fixtures, and environment checks explicit and reproducible.
+alwaysApply: false
+---
+
+# GTK
+
+- Inspect `git status` and `git diff` before claiming a change is complete.
+- Do not commit secrets, environment files, or local databases.
+- Run the repository's existing test runner. Quote the command and the result.
+- Keep fixtures deterministic and local to the tests that use them.
+- If a required service or browser was unavailable, report the check as not run, not as passed.
+- Match existing CI commands instead of adding a second way to test.

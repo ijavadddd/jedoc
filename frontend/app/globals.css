@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --background: 220 15% 3%;
+  --foreground: 216 33% 93%;
+  --card: 220 14% 8%;
+  --card-foreground: 216 33% 93%;
+  --popover: 220 14% 8%;
+  --popover-foreground: 216 33% 93%;
+  --primary: 33 58% 60%;
+  --primary-foreground: 220 15% 4%;
+  --secondary: 220 16% 11%;
+  --secondary-foreground: 216 33% 93%;
+  --muted: 220 16% 11%;
+  --muted-foreground: 218 14% 60%;
+  --accent: 220 14% 14%;
+  --accent-foreground: 216 33% 93%;
+  --destructive: 0 79% 69%;
+  --destructive-foreground: 220 15% 4%;
+  --border: 218 16% 18%;
+  --input: 218 16% 18%;
+  --ring: 214 100% 74%;
+  --radius: 0.6rem;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.react-flow {
+  --xy-background-color: #07080b;
+  background: #07080b;
+}
+
+.react-flow__controls-button {
+  background: #171b22;
+  border-bottom-color: #262b36;
+  fill: #e7ecf3;
+}
+
+.react-flow__controls-button:hover {
+  background: #222833;
+}
+
+.react-flow__minimap {
+  background: #101218 !important;
+  border: 1px solid #262b36;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.react-flow__node-agent {
+  cursor: grab;
+}
+
+.react-flow__node-agent:active {
+  cursor: grabbing;
+}
+
+.react-flow__edge-text {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.xterm {
+  padding: 8px;
+}
+
+@keyframes jedoc-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.pulse-dot {
+  animation: jedoc-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+}

@@ -1,0 +1,11 @@
+---
+description: Inspect graphify-out/GRAPH_REPORT.md before architectural claims or structural review.
+alwaysApply: false
+---
+
+# Graphify
+
+- Run `python3 .cursor/skills/graphify/graphify_cli.py .` when `graphify-out/GRAPH_REPORT.md` is missing or stale relative to the files you are judging.
+- Base architectural claims on modules and tables that appear in the report or that you have opened.
+- Mention import boundaries and data ownership you actually saw.
+- Do not propose a new service if an existing module already owns the behavior, unless the PRD requires the split.

@@ -1,0 +1,11 @@
+{
+  "id": "graphify",
+  "name": "Graphify",
+  "summary": "Map Python AST imports, TypeScript imports, and SQLAlchemy or SQL tables into graphify-out/GRAPH_REPORT.md.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/graphify/SKILL.md"},
+    {"src": "rules/graphify.mdc", "dest": ".cursor/rules/graphify.mdc"},
+    {"src": "graphify_cli.py", "dest": ".cursor/skills/graphify/graphify_cli.py"}
+  ]
+}

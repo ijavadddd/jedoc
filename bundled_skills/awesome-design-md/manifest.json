@@ -1,0 +1,11 @@
+{
+  "id": "awesome-design-md",
+  "name": "Awesome Design MD",
+  "summary": "DESIGN.md design system plus a rule that keeps UI structure, tokens, and accessibility consistent.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/awesome-design-md/SKILL.md"},
+    {"src": "DESIGN.md", "dest": "DESIGN.md"},
+    {"src": "rules/design-md.mdc", "dest": ".cursor/rules/design-md.mdc"}
+  ]
+}

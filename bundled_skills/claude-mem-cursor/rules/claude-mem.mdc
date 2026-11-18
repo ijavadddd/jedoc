@@ -1,0 +1,12 @@
+---
+description: Read and update the local Jedoc Claude Mem SQLite MCP before and after architectural decisions and bug fixes.
+alwaysApply: false
+---
+
+# Local cross-session memory
+
+- Search `jedoc-claude-mem` (`memory_search`) before changing architecture, schema, or a previously failing behavior.
+- Store a memory only for decisions, durable facts, constraints, and bug post-mortems. Compress; do not archive the transcript.
+- Never store secrets or customer data.
+- If you overturn an older memory, write a new `decision` that names the old constraint and why it changed.
+- If the memory server is down, continue the task and report that memory was not consulted.

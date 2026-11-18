@@ -1,0 +1,10 @@
+{
+  "id": "ponytail",
+  "name": "Ponytail",
+  "summary": "Code hygiene, modular structure, dead-code removal, and naming consistency.",
+  "version": "1.0.0",
+  "files": [
+    {"src": "SKILL.md", "dest": ".cursor/skills/ponytail/SKILL.md"},
+    {"src": "rules/ponytail.mdc", "dest": ".cursor/rules/ponytail.mdc"}
+  ]
+}
