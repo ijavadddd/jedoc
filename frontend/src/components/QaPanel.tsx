@@ -14,11 +14,11 @@ export function QaPanel({ progress, cards }: { progress: QaProgress | null; card
   const elapsed = progress?.elapsed_s ?? 0;
   const ratio = duration > 0 ? Math.min(1, elapsed / duration) : 0;
   return (
-    <div className="flex h-full min-w-0 flex-col bg-panel">
-      <div className="border-b border-line px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted">
+    <div className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden bg-panel">
+      <div className="shrink-0 border-b border-line px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted">
         QA and data audit
       </div>
-      <div className="border-b border-line px-3 py-3">
+      <div className="shrink-0 border-b border-line px-3 py-3">
         <div className="flex items-end justify-between">
           <div>
             <div className="font-mono text-lg text-paper">
@@ -31,7 +31,7 @@ export function QaPanel({ progress, cards }: { progress: QaProgress | null; card
           <div className="h-full bg-gold" style={{ width: `${ratio * 100}%` }} />
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {cards.length === 0 && <p className="text-xs text-muted">Database cards appear when the auditor runs integrity, foreign-key, and precision checks.</p>}
         {cards.map((card, index) => (
           <Card key={`${card.table}-${card.check}-${index}`}>

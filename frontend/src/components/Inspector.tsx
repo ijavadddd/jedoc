@@ -377,7 +377,7 @@ function ContextTab({
                 {turn.role} · {turn.chat_id.slice(0, 12)}
               </div>
               <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap font-mono text-[10px] text-paper/90">
-                {turn.content.slice(0, 1200)}
+                {turn.content}
               </pre>
             </article>
           ))}

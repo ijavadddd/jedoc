@@ -8,6 +8,7 @@ interface Props {
   name: string;
   enabled: boolean;
   canDelete: boolean;
+  onEdit: () => void;
   onToggle: () => void;
   onDelete: () => void;
   onClose: () => void;
@@ -24,6 +25,7 @@ export function NodeContextMenu(props: Props) {
       <DropdownMenuContent align="start" className="w-44" side="bottom">
         <DropdownMenuLabel>{props.name}</DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={props.onEdit}>Edit agent</DropdownMenuItem>
         <DropdownMenuItem onSelect={props.onToggle}>{props.enabled ? "Disable agent" : "Enable agent"}</DropdownMenuItem>
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"

@@ -114,6 +114,7 @@ export interface Skill {
 }
 
 export interface JedocEvent {
+  id?: string;
   type: string;
   node_id?: string;
   status?: string;
@@ -123,6 +124,7 @@ export interface JedocEvent {
   text?: string;
   kind?: string;
   name?: string;
+  level?: string;
   detail?: string;
   error?: string;
   elapsed_s?: number;

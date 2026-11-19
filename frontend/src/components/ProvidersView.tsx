@@ -51,7 +51,11 @@ export function ProvidersView({ providers, onSave, onRefresh, onLogin, onLogout 
         <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
           <div>
             <CardTitle>Cursor</CardTitle>
-            <CardDescription className="mt-1 font-mono">{cursor.installed === false ? "agent is not on PATH" : "agent CLI"}</CardDescription>
+            <CardDescription className="mt-1 font-mono">
+              {cursor.installed === false
+                ? "agent is not on PATH (use ./start.sh on the host; Docker has no Cursor CLI)"
+                : "agent CLI"}
+            </CardDescription>
           </div>
           <Badge variant="outline" className={cursor.authenticated ? "border-mint/40 text-mint" : "border-amber/50 text-amber"}>
             {cursor.authenticated ? "Authorized" : "Not authorized"}

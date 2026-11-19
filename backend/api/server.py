@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -128,7 +128,10 @@ def create_app() -> FastAPI:
 
         path = checkpoint_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(str(path)) as connection:
+        # Busy timeout + WAL avoids "database is locked" when an interrupt flushes the checkpoint.
+        async with aiosqlite.connect(str(path), timeout=60.0) as connection:
+            await connection.execute("PRAGMA journal_mode=WAL")
+            await connection.execute("PRAGMA busy_timeout=60000")
             saver = AsyncSqliteSaver(connection)
             await saver.setup()
             runner.checkpointer = saver
@@ -506,10 +509,11 @@ def create_app() -> FastAPI:
     async def start_feature(feature_id: str):
         feature = _require_feature(app, feature_id)
         if feature["status"] == "paused":
-            raise HTTPException(409, "Feature is waiting for approval. Use approve.")
+            raise HTTPException(409, "Feature is waiting for approval. Use approve or resume.")
         if feature["status"] in {"running", "archived", "completed"}:
             raise HTTPException(409, f"Cannot start a feature that is {feature['status']}")
         if feature["status"] == "failed":
+            # Fresh start from the beginning — use /resume to continue a checkpoint after a crash.
             app.state.store.update_feature(feature_id, thread_id=new_thread_id(), error="")
         try:
             app.state.runner.launch(feature_id, resume=False)
@@ -524,6 +528,30 @@ def create_app() -> FastAPI:
             raise HTTPException(409, "Feature is not waiting for approval")
         try:
             app.state.runner.launch(feature_id, resume=True, note=body.note)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"status": "running", "feature_id": feature_id}
+
+    @app.post("/api/features/{feature_id}/resume", status_code=202)
+    async def resume_feature(feature_id: str, body: ApproveIn = Body(default_factory=ApproveIn)):
+        """Continue from the LangGraph checkpoint after pause, approval, or a recoverable failure."""
+        feature = _require_feature(app, feature_id)
+        if feature["status"] == "running":
+            if app.state.runner.is_executing(feature_id):
+                raise HTTPException(409, "Feature is already running")
+            # Orphaned "running" after a hung/killed worker — clear so Resume can recover.
+            app.state.store.update_feature(
+                feature_id,
+                status="failed",
+                error="Previous run left no live worker. Resuming from the last passed agent.",
+            )
+            feature = _require_feature(app, feature_id)
+        if feature["status"] in {"archived", "completed", "draft"}:
+            raise HTTPException(409, f"Cannot resume a feature that is {feature['status']}")
+        if feature["status"] == "failed":
+            app.state.store.update_feature(feature_id, error="")
+        try:
+            app.state.runner.launch(feature_id, resume=True, note=body.note or "")
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"status": "running", "feature_id": feature_id}

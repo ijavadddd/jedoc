@@ -60,7 +60,7 @@ export function App() {
   );
   const [railOpen, setRailOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [dockOpen, setDockOpen] = useState(false);
+  const [dockOpen, setDockOpen] = useState(true);
   const [chatOpen, setChatOpen] = useState(true);
   const [chatWidth, setChatWidth] = useState(380);
   const [railWidth, setRailWidth] = useState(240);
@@ -205,8 +205,18 @@ export function App() {
     setLayoutKey((value) => value + 1);
   }, [railOpen, inspectorOpen, dockOpen, screen, chatOpen]);
 
+  useEffect(() => {
+    if (feature?.status === "running" || feature?.status === "paused") {
+      setDockOpen(true);
+    }
+  }, [feature?.status]);
+
   const derived = useMemo(() => reduceEvents(events, feature?.sessions ?? []), [events, feature?.sessions]);
   const locked = feature?.status === "running" || feature?.status === "paused";
+  const liveAction =
+    (nodeId && derived.telemetry[nodeId]?.action) ||
+    Object.values(derived.telemetry).find((item) => item.status === "RUNNING")?.action ||
+    "";
 
   async function guard(action: () => Promise<void>) {
     try {
@@ -299,7 +309,26 @@ export function App() {
               }
               type="button"
             >
-              Start pipeline
+              {feature.status === "failed" ? "Restart from start" : "Start pipeline"}
+            </Button>
+          )}
+          {feature?.status === "failed" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                void guard(async () => {
+                  await api(`/api/features/${feature.id}/resume`, {
+                    method: "POST",
+                    body: JSON.stringify({ note: "Resumed after failure." }),
+                  });
+                  await selectFeature(feature.id);
+                  setFeatures(await api<Feature[]>("/api/features"));
+                })
+              }
+              type="button"
+            >
+              Resume checkpoint
             </Button>
           )}
           {feature?.status === "paused" && (
@@ -456,6 +485,12 @@ export function App() {
                 Show stream
               </Button>
             )}
+            {locked && liveAction ? (
+              <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-sky" title={liveAction}>
+                <span className="pulse-dot mr-2 inline-block align-middle" />
+                {liveAction}
+              </div>
+            ) : null}
           </div>
           <div className="flex min-h-0 flex-1">
             {railOpen && flow.id && (
@@ -602,16 +637,23 @@ export function App() {
           </div>
           {dockOpen ? (
             <>
-              <ResizeBar axis="y" onDelta={(delta) => setDockHeight((height) => Math.min(480, Math.max(120, height - delta)))} />
-              <div className="flex shrink-0 flex-col border-t border-line" style={{ height: dockHeight }}>
-                <div className="flex justify-end border-b border-line px-2 py-1">
+              <ResizeBar axis="y" onDelta={(delta) => setDockHeight((height) => Math.min(420, Math.max(140, height - delta)))} />
+              <div
+                className="flex shrink-0 flex-col overflow-hidden border-t border-line"
+                style={{ height: dockHeight, maxHeight: "42vh" }}
+              >
+                <div className="flex shrink-0 justify-end border-b border-line px-2 py-1">
                   <Button variant="ghost" size="sm" onClick={() => setDockOpen(false)} type="button">
                     Minimize stream
                   </Button>
                 </div>
-                <div className="grid min-h-0 flex-1 grid-cols-[1.45fr_0.8fr]">
-                  <StreamPanel events={events} epoch={epoch} />
-                  <QaPanel progress={derived.progress} cards={derived.cards} />
+                <div className="grid min-h-0 flex-1 grid-cols-[1.45fr_0.8fr] overflow-hidden">
+                  <div className="min-h-0 min-w-0 overflow-hidden">
+                    <StreamPanel events={events} epoch={epoch} />
+                  </div>
+                  <div className="min-h-0 min-w-0 overflow-hidden">
+                    <QaPanel progress={derived.progress} cards={derived.cards} />
+                  </div>
                 </div>
               </div>
             </>
@@ -654,6 +696,10 @@ export function App() {
           name={flow.nodes.find((node) => node.id === nodeMenu.id)?.display_name || "Agent"}
           enabled={flow.nodes.find((node) => node.id === nodeMenu.id)?.enabled !== false}
           canDelete={!locked && flow.nodes.length > 1}
+          onEdit={() => {
+            selectNode(nodeMenu.id);
+            setNodeMenu(null);
+          }}
           onToggle={() => {
             const node = flow.nodes.find((item) => item.id === nodeMenu.id);
             void setNodeEnabled(nodeMenu.id, node?.enabled === false);

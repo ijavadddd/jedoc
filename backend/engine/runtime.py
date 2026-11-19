@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -54,10 +55,11 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
 
         if "graphify" in (node.get("enabled_skills") or []) and role == "architect":
             await _status(bus, feature_id, node, "RUNNING", "", "Mapping the repository with graphify", started)
-            _run_graphify(workspace)
+            await _run_graphify(workspace, bus=bus, feature_id=feature_id, node=node, started=started)
 
         chat_id = ""
         if role in MODEL_ROLES:
+            await _status(bus, feature_id, node, "RUNNING", "", "Opening Cursor chat…", started)
             chat_id = await _ensure_chat(
                 store,
                 feature_id,
@@ -85,6 +87,8 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
         chat = {"id": chat_id}
         live_files: dict[str, dict[str, Any]] = {}
 
+        last_action_at = {"t": 0.0}
+
         async def sink(event: dict[str, Any]) -> None:
             await bus.publish(feature_id, event)
             if event.get("type") != "stream":
@@ -96,7 +100,8 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
                     store.set_agent_chat_id(feature_id, node_id, text)
                     chat["id"] = text
                 return
-            if kind not in {"tool_call", "shell", "mcp"}:
+            action = _live_action(event)
+            if not action:
                 return
             if kind == "tool_call" and event.get("subtype") == "completed":
                 noted = _note_file_edit(workspace, live_files, event)
@@ -105,18 +110,15 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
                         feature_id,
                         {"type": "file_changes", "node_id": node_id, "chat_id": chat["id"], "files": noted},
                     )
-            await _status(
-                bus,
-                feature_id,
-                node,
-                "RUNNING",
-                chat["id"],
-                (event.get("text") or event.get("detail") or "Tool call")[:180],
-                started,
-            )
+            now = time.time()
+            # Tool/shell/mcp always refresh the node; token streams are throttled so the canvas stays readable.
+            if kind in {"tool_call", "shell", "mcp", "system", "thinking"} or now - last_action_at["t"] >= 0.35:
+                last_action_at["t"] = now
+                await _status(bus, feature_id, node, "RUNNING", chat["id"], action[:180], started)
 
         model_name = default_model_override() or node.get("model") or ""
         cli_env = store.provider_credentials(node.get("provider") or "cursor")
+        await _status(bus, feature_id, node, "RUNNING", chat["id"], "Launching Cursor agent…", started)
         model = CursorCLIChatModel(
             model_name=model_name,
             mode=node.get("cursor_mode") or "agent",
@@ -396,19 +398,103 @@ def _clock(seconds: int) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
-def _run_graphify(workspace: Path) -> None:
+def _live_action(event: dict[str, Any]) -> str:
+    """Human-readable activity line for the canvas while the Cursor stream is live."""
+    kind = str(event.get("kind") or "")
+    text = str(event.get("text") or event.get("detail") or "").strip()
+    name = str(event.get("name") or "").strip()
+    if kind == "thinking":
+        return f"Thinking… {text}" if text else "Thinking…"
+    if kind == "assistant":
+        return f"Writing… {text}" if text else "Writing…"
+    if kind == "shell":
+        return f"$ {text or name or 'shell'}"
+    if kind == "mcp":
+        return f"MCP {name or 'tool'}: {text}".strip(": ")
+    if kind == "tool_call":
+        return text or (f"{name}…" if name else "Tool call")
+    if kind == "system":
+        return text or "Agent update"
+    if kind == "session":
+        return f"Session {text[:18]}" if text else ""
+    return text
+
+
+async def _run_graphify(
+    workspace: Path,
+    *,
+    bus: EventBus | None = None,
+    feature_id: str = "",
+    node: dict[str, Any] | None = None,
+    started: float = 0.0,
+) -> None:
+    """Map the repo for the architect. Timeouts and tool failures must not abort the feature."""
     synced = workspace / ".cursor" / "skills" / "graphify" / "graphify_cli.py"
     script = synced if synced.exists() else bundled_skills_dir() / "graphify" / "graphify_cli.py"
     if not script.exists():
         return
-    subprocess.run(
-        [sys.executable, str(script), str(workspace)],
-        cwd=workspace,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    raw = os.environ.get("JEDOC_GRAPHIFY_TIMEOUT_S", "300").strip()
+    try:
+        timeout = max(30, int(raw or "300"))
+    except ValueError:
+        timeout = 300
+    import asyncio
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(script),
+            str(workspace),
+            cwd=workspace,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        _write_graphify_fallback(workspace, f"Graphify could not run: {exc}")
+        return
+
+    deadline = time.time() + timeout
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            process.kill()
+            await process.wait()
+            _write_graphify_fallback(
+                workspace,
+                f"Timed out after {timeout}s while mapping `{workspace.name}`. "
+                "Proceed from the PRD and the visible repository layout.",
+            )
+            return
+        try:
+            await asyncio.wait_for(process.wait(), timeout=min(5.0, remaining))
+            break
+        except TimeoutError:
+            if bus is not None and node is not None and feature_id:
+                elapsed = int(time.time() - (started or time.time()))
+                await _status(
+                    bus,
+                    feature_id,
+                    node,
+                    "RUNNING",
+                    "",
+                    f"Mapping repository… {_clock(elapsed)} (still scanning {workspace.name})",
+                    started,
+                )
+            continue
+    if process.returncode not in (0, None) and not (workspace / "graphify-out" / "GRAPH_REPORT.md").exists():
+        stderr = ""
+        if process.stderr is not None:
+            stderr = (await process.stderr.read()).decode("utf-8", errors="replace")[:1500]
+        _write_graphify_fallback(workspace, stderr.strip() or f"Graphify exited {process.returncode}")
+
+
+def _write_graphify_fallback(workspace: Path, detail: str) -> None:
+    out = workspace / "graphify-out"
+    out.mkdir(parents=True, exist_ok=True)
+    report = out / "GRAPH_REPORT.md"
+    if report.exists():
+        return
+    report.write_text(f"# Graphify report\n\n{detail}\n", encoding="utf-8")
 
 
 def _run_pytest(workspace: Path) -> str:

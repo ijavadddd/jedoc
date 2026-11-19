@@ -196,7 +196,7 @@ export function TopologyCanvas({ flow, telemetry, locked, focusNodeId, layoutKey
       </ReactFlow>
       <div className="pointer-events-none absolute left-3 top-3 flex gap-2 font-mono text-[10px] text-muted">
         <span className="rounded border border-line bg-panel/90 px-2 py-1">drag nodes to rearrange</span>
-        <span className="rounded border border-line bg-panel/90 px-2 py-1">right-click to enable, disable, or delete</span>
+        <span className="rounded border border-line bg-panel/90 px-2 py-1">right-click to edit, enable, disable, or delete</span>
         <span className="rounded border border-line bg-panel/90 px-2 py-1">out = forward</span>
         <span className="rounded border border-line bg-panel/90 px-2 py-1 text-coral">fail handle loops back</span>
         <span className="rounded border border-line bg-panel/90 px-2 py-1 text-amber">scale returns to the architect</span>

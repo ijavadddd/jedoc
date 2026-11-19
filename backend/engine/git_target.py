@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from backend.config import data_dir
@@ -53,8 +54,36 @@ def inspect_repo(path: str) -> dict:
 
 async def pick_project_folder() -> str | None:
     """Open the desktop folder dialog and return the chosen path. Cancel returns None."""
-    if shutil.which("zenity") is None:
-        raise GitError("Zenity is not installed, so Jedoc cannot open a folder dialog.")
+    if sys.platform == "darwin" and shutil.which("osascript"):
+        return await _pick_folder_osascript()
+    if shutil.which("zenity"):
+        return await _pick_folder_zenity()
+    raise GitError(
+        "No folder dialog tool is available. On macOS use osascript (built-in); on Linux install zenity."
+    )
+
+
+async def _pick_folder_osascript() -> str | None:
+    script = 'POSIX path of (choose folder with prompt "Select a project folder")'
+    process = await asyncio.create_subprocess_exec(
+        "osascript",
+        "-e",
+        script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=180)
+    except TimeoutError:
+        process.kill()
+        raise GitError("The folder dialog timed out.") from None
+    if process.returncode != 0:
+        return None
+    chosen = stdout.decode("utf-8", errors="replace").strip().rstrip("/")
+    return chosen or None
+
+
+async def _pick_folder_zenity() -> str | None:
     env = os.environ.copy()
     if not env.get("DISPLAY"):
         for number in ("1", "0"):

@@ -105,7 +105,7 @@ def describe_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
             break
         if name == "tool" and tool.get("name"):
             name = str(tool["name"])
-            detail = json.dumps(tool.get("arguments") or tool.get("args") or {})[:500]
+            detail = json.dumps(tool.get("arguments") or tool.get("args") or {})
             if "mcp" in name.lower():
                 kind = "mcp"
             if "shell" in name.lower() or "bash" in name.lower():
@@ -118,7 +118,7 @@ def describe_tool_call(payload: dict[str, Any]) -> dict[str, Any]:
         "kind": kind,
         "name": name,
         "subtype": subtype,
-        "detail": detail[:4000],
+        "detail": detail,
         "text": f"{name} {subtype} {detail}".strip(),
     }
     edit = file_edit_from_tool(payload, name)
@@ -372,7 +372,7 @@ class CursorCLIChatModel(BaseChatModel):
                 try:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
-                    await self._emit({"type": "stream", "kind": "system", "text": raw[:2000]})
+                    await self._emit({"type": "stream", "kind": "system", "text": raw})
                     continue
                 async for delta in self._consume_payload(payload, assistant):
                     event_type, assistant, piece, final_result = delta
@@ -390,14 +390,40 @@ class CursorCLIChatModel(BaseChatModel):
                         return
 
         got_text = False
+        quiet_since = time.monotonic()
+
+        async def heartbeat() -> None:
+            while True:
+                await asyncio.sleep(4)
+                waited = int(time.monotonic() - quiet_since)
+                if waited < 4:
+                    continue
+                await self._emit(
+                    {
+                        "type": "stream",
+                        "kind": "system",
+                        "text": f"Cursor is working… {waited}s (waiting for the next stream event)",
+                    }
+                )
+
+        pulse = asyncio.create_task(heartbeat())
         try:
             async with asyncio.timeout(self.timeout_s):
                 async for piece in read_stdout():
+                    if not got_text:
+                        quiet_since = time.monotonic()
                     got_text = True
+                    quiet_since = time.monotonic()
                     yield piece
         except TimeoutError as exc:
             self._terminate(process)
             raise CursorCLIError(f"Cursor CLI timed out after {self.timeout_s}s") from exc
+        finally:
+            pulse.cancel()
+            try:
+                await pulse
+            except asyncio.CancelledError:
+                pass
         if got_text:
             # The answer is already on the socket. Let the same process save the session, then stop it.
             asyncio.create_task(
@@ -427,8 +453,8 @@ class CursorCLIChatModel(BaseChatModel):
         code = process.returncode
         if code not in (0, None):
             detail = stderr.strip() or "Cursor CLI exited with a non-zero status"
-            await self._emit({"type": "stream", "kind": "system", "text": detail[-4000:], "level": "error"})
-            raise CursorCLIError(detail[-4000:])
+            await self._emit({"type": "stream", "kind": "system", "text": detail, "level": "error"})
+            raise CursorCLIError(detail)
 
     async def _remember_session(self, payload: dict[str, Any]) -> None:
         """The CLI session id is the chat. Later messages resume it instead of opening another."""
@@ -481,7 +507,7 @@ class CursorCLIChatModel(BaseChatModel):
                 yield ("system", assistant, "", "")
                 return
             text = extract_text(payload) or str(payload.get("subtype") or kind)
-            await self._emit({"type": "stream", "kind": "system", "text": text[:2000]})
+            await self._emit({"type": "stream", "kind": "system", "text": text})
             yield ("system", assistant, "", "")
             return
         yield ("other", assistant, "", "")

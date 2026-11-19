@@ -65,3 +65,71 @@ def test_pipeline_pauses_then_keeps_chat_ids(tmp_path: Path, monkeypatch):
     assert store.get_feature(feature["id"])["status"] == "archived"
     assert store.get_active_session(feature["id"], "implementer") is None
     assert any(row["agent_id"] == "implementer" for row in store.list_sessions(feature["id"]))
+
+
+def test_format_run_failure_keeps_message_not_mid_traceback_tail():
+    from backend.engine.runner import _format_run_failure
+
+    try:
+        raise RuntimeError("ActionRequiredError: GPT-5.6 Sol is not included in your weekly usage")
+    except RuntimeError as exc:
+        detail = _format_run_failure(exc)
+    assert "GPT-5.6 Sol is not included in your weekly usage" in detail
+    assert detail.startswith("RuntimeError:") or detail.startswith("Traceback")
+    assert not detail.startswith("nd/engine")
+
+
+def test_recover_orphaned_running_and_empty_checkpoint_resume(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("JEDOC_EXECUTION_MODE", "simulate")
+    monkeypatch.setenv("JEDOC_QA_DURATION_S", "0")
+
+    store = FeatureSessionStore(str(tmp_path / "jedoc.sqlite"))
+    skills = SkillManager(store)
+    bus = EventBus(store)
+    runner = PipelineRunner(store, skills, bus, checkpointer=MemorySaver())
+    runner.startup()
+
+    workspace = prepare_workspace(tmp_path / "workspace", "Orphan resume.")
+    feature = store.create_feature(
+        name="Orphan",
+        prd="Orphan resume.",
+        workspace_path=str(workspace),
+        flow_id="jedoc-million-user",
+    )
+    store.update_feature(feature["id"], status="running", error="")
+    assert runner.recover_orphaned_runs() == 1
+    assert store.get_feature(feature["id"])["status"] == "failed"
+    assert runner.is_executing(feature["id"]) is False
+
+    # Simulate a lost interrupt flush: audit shows gate passed, checkpoint is empty.
+    store.add_audit(
+        feature["id"],
+        "node_status",
+        {
+            "type": "node_status",
+            "node_id": "pre_impl_gate",
+            "status": "PASSED",
+            "action": "Review packet ready",
+        },
+        node_id="pre_impl_gate",
+    )
+    flow = store.get_flow("jedoc-million-user")
+    assert flow is not None
+    from backend.engine.graph_builder import compile_flow
+
+    graph = compile_flow(flow, store, skills, bus, runner.checkpointer)
+    config = {"configurable": {"thread_id": feature["thread_id"]}}
+
+    async def _prep():
+        await runner._prepare_resume(graph, config, store.get_feature(feature["id"]), flow, note="go")
+
+    asyncio.run(_prep())
+    statuses = [
+        row["payload"]
+        for row in store.list_audit(feature["id"], limit=50)
+        if row["event_type"] == "node_status" and row["payload"].get("node_id") == "implementer"
+    ]
+    assert statuses, "resume must announce the next agent before hanging on checkpoint I/O"
+    assert statuses[-1]["status"] == "RUNNING"
+    snap = asyncio.run(graph.aget_state(config))
+    assert list(snap.next or []) == ["implementer"]

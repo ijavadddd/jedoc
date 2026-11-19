@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     ports:
-      - "8000:8000"
+      # Host port overridable when 8000 is already taken (e.g. another local stack).
+      - "${JEDOC_API_PORT:-8005}:8000"
     environment:
       JEDOC_DATA_DIR: /app/data
       JEDOC_BUNDLED_SKILLS: /app/bundled_skills
