@@ -29,7 +29,7 @@ def default_flow() -> dict:
                 "cursor_mode": "plan",
                 "model": "claude-sonnet-4-6",
                 "timeout_s": 600,
-                "max_retries": 2,
+                "max_retries": 8,
                 "require_approval_before": False,
                 "approve_every_entry": False,
                 "enabled_skills": ["founder-skill", "napkin", "graphify", "claude-mem-cursor"],
@@ -39,7 +39,9 @@ def default_flow() -> dict:
                     "Map the real repository from the graphify report, sketch the hot path and the write path, "
                     "and audit the PRD for millions of concurrent users. Reject hot rows, lock convoys, "
                     "N+1 queries, horizontal state that is actually a single lock, and cache designs that "
-                    "authorize writes. Produce PRD_OPTIMIZED.md and ARCHITECTURE_SPEC.md."
+                    "authorize writes. When review or QA escalates back here, revise ARCHITECTURE_SPEC.md "
+                    "to unblock the implementer — do not rubber-stamp a failing design. "
+                    "Produce PRD_OPTIMIZED.md and ARCHITECTURE_SPEC.md."
                 ),
                 "behavior_data": {
                     "target_concurrent_users": 10000000,
@@ -113,8 +115,8 @@ def default_flow() -> dict:
                 "role_type": "implementer",
                 "cursor_mode": "agent",
                 "model": "composer-1.5",
-                "timeout_s": 900,
-                "max_retries": 3,
+                "timeout_s": 1800,
+                "max_retries": 8,
                 "require_approval_before": True,
                 "approve_every_entry": False,
                 "enabled_skills": ["superpowers", "ponytail", "awesome-design-md", "gtk", "claude-mem-cursor"],
@@ -137,8 +139,8 @@ def default_flow() -> dict:
                 "role_type": "reviewer",
                 "cursor_mode": "plan",
                 "model": "gpt-5",
-                "timeout_s": 600,
-                "max_retries": 3,
+                "timeout_s": 1800,
+                "max_retries": 5,
                 "require_approval_before": False,
                 "approve_every_entry": False,
                 "enabled_skills": ["ponytail", "graphify", "claude-mem-cursor"],
@@ -147,7 +149,10 @@ def default_flow() -> dict:
                     "You are a hostile reviewer in plan mode. Compare the git diff to ARCHITECTURE_SPEC.md. "
                     "Check hygiene, security, integer precision, idempotency, and concurrency. "
                     "If the diff edits tests to weaken them, or the write path can oversell, return VERDICT: FAIL "
-                    "with file and line notes. Return VERDICT: PASS only when you would ship it."
+                    "with file and line notes so the implementer can fix it. "
+                    "If the miss is architectural (hot row, lock convoy, unbounded fan-out, missing backpressure), "
+                    "return VERDICT: SCALE_ISSUE so the PRD Scale Architect reopens the spec. "
+                    "Return VERDICT: PASS only when you would ship it."
                 ),
                 "behavior_data": {
                     "must_cite": ["ARCHITECTURE_SPEC.md"],
@@ -161,7 +166,7 @@ def default_flow() -> dict:
                 "cursor_mode": "plan",
                 "model": "gpt-5",
                 "timeout_s": 900,
-                "max_retries": 2,
+                "max_retries": 5,
                 "require_approval_before": False,
                 "approve_every_entry": False,
                 "enabled_skills": ["gtk", "claude-mem-cursor"],
@@ -207,6 +212,7 @@ def default_flow() -> dict:
             _edge("e-gate-impl", "pre_impl_gate", "implementer", "always", "out", "in"),
             _edge("e-impl-rev", "implementer", "adversarial_reviewer", "always", "out", "in"),
             _edge("e-rev-fail", "adversarial_reviewer", "implementer", "on_fail", "fail", "back"),
+            _edge("e-rev-scale", "adversarial_reviewer", "prd_scale_architect", "on_scale_issue", "scale", "back"),
             _edge("e-rev-pass", "adversarial_reviewer", "live_10m_qa_db_auditor", "on_pass", "out", "in"),
             _edge("e-qa-fail", "live_10m_qa_db_auditor", "implementer", "on_fail", "fail", "back"),
             _edge("e-qa-scale", "live_10m_qa_db_auditor", "prd_scale_architect", "on_scale_issue", "scale", "back"),

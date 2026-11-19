@@ -40,6 +40,85 @@ class CursorCLIError(RuntimeError):
     pass
 
 
+# Live Cursor CLI processes keyed by feature_id. Pause/restart must kill these
+# directly — CancelledError often never reaches _stream_cli through LangGraph.
+_active_cli: dict[str, set[tuple[asyncio.subprocess.Process, Any]]] = {}
+
+
+def track_cli_process(
+    feature_id: str,
+    process: asyncio.subprocess.Process,
+    close_terminal: Callable[[], None] | None = None,
+) -> None:
+    if not feature_id:
+        return
+    _active_cli.setdefault(feature_id, set()).add((process, close_terminal))
+
+
+def untrack_cli_process(feature_id: str, process: asyncio.subprocess.Process) -> None:
+    live = _active_cli.get(feature_id)
+    if not live:
+        return
+    for item in list(live):
+        if item[0] is process:
+            live.discard(item)
+    if not live:
+        _active_cli.pop(feature_id, None)
+
+
+def _kill_process_group(process: asyncio.subprocess.Process, sig: int = signal.SIGTERM) -> None:
+    if process.pid is None:
+        return
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            process.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            return
+
+
+async def kill_feature_cli_processes(feature_id: str) -> int:
+    """Stop every tracked Cursor CLI for this feature (SIGTERM, then SIGKILL)."""
+    live = list(_active_cli.pop(feature_id, set()))
+    if not live:
+        return 0
+    for process, close_terminal in live:
+        if close_terminal is not None:
+            try:
+                close_terminal()
+            except Exception:
+                pass
+        _kill_process_group(process, signal.SIGTERM)
+    await asyncio.sleep(0.15)
+    still = 0
+    for process, _close in live:
+        if process.returncode is None:
+            _kill_process_group(process, signal.SIGKILL)
+            still += 1
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.5)
+            except TimeoutError:
+                pass
+    return len(live)
+
+
+def is_cli_timeout(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "timed out" in text or "no cursor activity" in text or "hard limit" in text
+
+
+def cli_hard_timeout_s(idle_timeout_s: int) -> int:
+    """Absolute ceiling so a continuously-streaming agent cannot run forever."""
+    raw = os.environ.get("JEDOC_CLI_HARD_TIMEOUT_S", "").strip()
+    if raw.isdigit():
+        return max(int(raw), idle_timeout_s)
+    # Default: at least 2h, or 8× the idle budget for long implement/review turns.
+    return max(idle_timeout_s * 8, 7200)
+
+
 def message_text(message: BaseMessage) -> str:
     content = message.content
     if isinstance(content, str):
@@ -324,28 +403,114 @@ class CursorCLIChatModel(BaseChatModel):
             raise CursorCLIError("chat_id is required. Create a session before invoking the model.")
         command = self._build_command(prompt)
         process, stdout, close_terminal = await _pty_subprocess(command, cwd=self.workspace, env=_subprocess_env(self.cli_env))
+        track_cli_process(self.feature_id, process, close_terminal)
         assistant = ""
         final_result = ""
         stderr_task = asyncio.create_task(self._drain_stderr(process))
         exit_task = asyncio.create_task(process.wait())
         pending_read: dict[str, asyncio.Task[bytes] | None] = {"task": None}
 
+        got_text = False
+        quiet_since = time.monotonic()
+        last_activity = time.monotonic()
+        started_at = time.monotonic()
+        idle_limit = max(30, int(self.timeout_s or 900))
+        hard_limit = cli_hard_timeout_s(idle_limit)
+        timed_out = asyncio.Event()
+        timeout_detail = {"msg": ""}
+
+        active_tools: dict[str, float] = {}
+
+        def touch_activity() -> None:
+            nonlocal last_activity, quiet_since
+            last_activity = time.monotonic()
+            quiet_since = last_activity
+
+        async def heartbeat() -> None:
+            while True:
+                await asyncio.sleep(4)
+                if timed_out.is_set():
+                    return
+                if active_tools:
+                    # Long Cursor Task/MCP calls emit no tokens — keep the UI honest and
+                    # treat the in-flight tool as live activity so idle timeout does not fire.
+                    label, began = next(iter(active_tools.items()))
+                    waited = int(time.monotonic() - began)
+                    touch_activity()
+                    await self._emit(
+                        {
+                            "type": "stream",
+                            "kind": "system",
+                            "text": f"Cursor tool `{label}` still running… {waited}s",
+                        }
+                    )
+                    continue
+                waited = int(time.monotonic() - quiet_since)
+                if waited < 4:
+                    continue
+                await self._emit(
+                    {
+                        "type": "stream",
+                        "kind": "system",
+                        "text": (
+                            f"Cursor is working… {waited}s idle "
+                            f"(limit {idle_limit}s idle / {hard_limit}s hard)"
+                        ),
+                    }
+                )
+
+        async def idle_watch() -> None:
+            while not timed_out.is_set():
+                await asyncio.sleep(1)
+                now = time.monotonic()
+                if active_tools:
+                    continue
+                if now - last_activity >= idle_limit:
+                    timeout_detail["msg"] = (
+                        f"No Cursor activity for {idle_limit}s "
+                        f"(agent may be stuck — Resume to retry)"
+                    )
+                    timed_out.set()
+                    # Unblock a hung readline without cancelling it (cancel deadlocks the PTY).
+                    close_terminal()
+                    self._terminate(process)
+                    return
+                if now - started_at >= hard_limit:
+                    timeout_detail["msg"] = f"Cursor CLI exceeded hard limit of {hard_limit}s"
+                    timed_out.set()
+                    close_terminal()
+                    self._terminate(process)
+                    return
+
         async def read_stdout() -> AsyncIterator[str]:
             nonlocal assistant, final_result
             seen_tool = False
+            saw_result = False
             last_text_at = 0.0
             while True:
                 # Stop soon after the last answer token. Cancelling readline deadlocks the subprocess pipes,
                 # so a quiet turn is ended by letting the read finish after the process is stopped.
+                # Plan/ask reviews often pause mid-answer; never cut them off in 250ms without a VERDICT.
                 timeout = None
                 if last_text_at:
-                    timeout = max(0.1, (8.0 if seen_tool else 0.25) - (time.monotonic() - last_text_at))
+                    has_verdict = bool(re.search(r"VERDICT:\s*(PASS|FAIL|SCALE_ISSUE)\b", assistant, re.I))
+                    if saw_result or has_verdict:
+                        budget = 8.0 if seen_tool else 0.35
+                    elif (self.mode or "").lower() in {"plan", "ask"}:
+                        budget = 45.0
+                    else:
+                        budget = 8.0 if seen_tool else 2.0
+                    timeout = max(0.1, budget - (time.monotonic() - last_text_at))
                 read_task = asyncio.create_task(stdout.readline())
                 timer = asyncio.create_task(asyncio.sleep(timeout)) if timeout is not None else None
                 waiting = {read_task, exit_task}
                 if timer is not None:
                     waiting.add(timer)
                 done, _pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                if timed_out.is_set():
+                    if timer is not None:
+                        timer.cancel()
+                    return
                 if exit_task in done and read_task not in done:
                     # The CLI exited, and a child can keep the terminal open. Close it so this read finishes.
                     close_terminal()
@@ -369,6 +534,7 @@ class CursorCLIChatModel(BaseChatModel):
                 raw = line.decode("utf-8", errors="replace").strip()
                 if not raw:
                     continue
+                touch_activity()
                 try:
                     payload = json.loads(raw)
                 except json.JSONDecodeError:
@@ -376,68 +542,75 @@ class CursorCLIChatModel(BaseChatModel):
                     continue
                 async for delta in self._consume_payload(payload, assistant):
                     event_type, assistant, piece, final_result = delta
+                    touch_activity()
                     if event_type == "assistant" and piece:
                         last_text_at = time.monotonic()
                         yield piece
                     elif event_type == "tool":
                         seen_tool = True
+                        described = describe_tool_call(payload)
+                        label = str(described.get("name") or payload.get("name") or "tool")
+                        subtype = str(payload.get("subtype") or described.get("subtype") or "")
+                        if subtype == "started":
+                            active_tools[label] = time.monotonic()
+                        elif subtype in {"completed", "error", "cancelled"}:
+                            active_tools.pop(label, None)
                     if event_type in {"thinking", "assistant"} and piece:
                         # Let the chat socket flush this token before the next CLI line is parsed.
                         await asyncio.sleep(0)
                     if event_type == "result":
+                        saw_result = True
+                        active_tools.clear()
                         if piece and not assistant:
                             yield piece
                         return
 
-        got_text = False
-        quiet_since = time.monotonic()
-
-        async def heartbeat() -> None:
-            while True:
-                await asyncio.sleep(4)
-                waited = int(time.monotonic() - quiet_since)
-                if waited < 4:
-                    continue
-                await self._emit(
-                    {
-                        "type": "stream",
-                        "kind": "system",
-                        "text": f"Cursor is working… {waited}s (waiting for the next stream event)",
-                    }
-                )
-
         pulse = asyncio.create_task(heartbeat())
+        watch = asyncio.create_task(idle_watch())
         try:
-            async with asyncio.timeout(self.timeout_s):
-                async for piece in read_stdout():
-                    if not got_text:
-                        quiet_since = time.monotonic()
-                    got_text = True
-                    quiet_since = time.monotonic()
-                    yield piece
-        except TimeoutError as exc:
+            async for piece in read_stdout():
+                if timed_out.is_set():
+                    break
+                got_text = True
+                touch_activity()
+                yield piece
+            if timed_out.is_set():
+                raise CursorCLIError(timeout_detail["msg"] or f"Cursor CLI timed out after {idle_limit}s")
+        except asyncio.CancelledError:
+            # User pause / mark-done / restart — stop the Cursor CLI immediately so it does not keep burning tokens.
+            close_terminal()
             self._terminate(process)
-            raise CursorCLIError(f"Cursor CLI timed out after {self.timeout_s}s") from exc
+            self._terminate(process, signal.SIGKILL)
+            raise
         finally:
-            pulse.cancel()
-            try:
-                await pulse
-            except asyncio.CancelledError:
-                pass
+            timed_out.set()
+            untrack_cli_process(self.feature_id, process)
+            for task in (pulse, watch):
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if got_text:
             # The answer is already on the socket. Let the same process save the session, then stop it.
-            asyncio.create_task(
-                _save_cli_session(
-                    process,
-                    stdout,
-                    stderr_task,
-                    exit_task,
-                    self._terminate,
-                    close_terminal,
-                    pending_read.get("task"),
-                    self._remember_session,
-                )
-            )
+            # Keep tracking until save finishes so pause/restart can still kill it.
+            async def _save_and_untrack() -> None:
+                try:
+                    await _save_cli_session(
+                        process,
+                        stdout,
+                        stderr_task,
+                        exit_task,
+                        self._terminate,
+                        close_terminal,
+                        pending_read.get("task"),
+                        self._remember_session,
+                    )
+                finally:
+                    untrack_cli_process(self.feature_id, process)
+
+            track_cli_process(self.feature_id, process, close_terminal)
+            asyncio.create_task(_save_and_untrack())
             return
         if process.returncode is None:
             self._terminate(process)
@@ -446,6 +619,7 @@ class CursorCLIChatModel(BaseChatModel):
         except TimeoutError:
             self._terminate(process, signal.SIGKILL)
             await exit_task
+        untrack_cli_process(self.feature_id, process)
         try:
             stderr = await asyncio.wait_for(stderr_task, timeout=2)
         except TimeoutError:
@@ -519,12 +693,7 @@ class CursorCLIChatModel(BaseChatModel):
         return data.decode("utf-8", errors="replace")
 
     def _terminate(self, process: asyncio.subprocess.Process, sig: int = signal.SIGTERM) -> None:
-        if process.pid is None:
-            return
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            pass
+        _kill_process_group(process, sig)
 
     async def _simulate(self, prompt: str) -> AsyncIterator[str]:
         from backend.providers.simulator import scripted_response

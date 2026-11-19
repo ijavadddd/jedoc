@@ -1,14 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { JedocEvent } from "../types";
+import { Button } from "./ui/button";
 
-type FeedItem =
-  | { key: string; kind: "meta"; tone: string; label: string; body: string }
-  | { key: string; kind: "markdown"; tone: string; label: string; body: string }
-  | { key: string; kind: "code"; tone: string; label: string; body: string };
+type Message = {
+  key: string;
+  kind: "assistant" | "notice";
+  label: string;
+  body: string;
+  tone: string;
+};
+
+type LiveLine = {
+  label: string;
+  body: string;
+  tone: string;
+};
 
 function toneFor(kind: string): string {
   if (kind === "thinking") return "text-muted";
@@ -17,6 +27,7 @@ function toneFor(kind: string): string {
   if (kind === "mcp" || kind === "tool_call") return "text-sky";
   if (kind === "system") return "text-amber";
   if (kind === "error" || kind === "failed") return "text-coral";
+  if (kind === "completed" || kind === "paused") return "text-mint";
   return "text-muted";
 }
 
@@ -24,10 +35,18 @@ function looksLikeMarkdown(text: string): boolean {
   return /(^#{1,6}\s)|(```)|(\*\*[^*]+\*\*)|(^\s*[-*]\s)|(^\s*\d+\.\s)|(\[[^\]]+\]\([^)]+\))/m.test(text);
 }
 
-function buildFeed(events: JedocEvent[]): FeedItem[] {
-  const items: FeedItem[] = [];
+function isEphemeralSystem(text: string): boolean {
+  return /cursor is working|still running|launching cursor|opening cursor|preparing workspace|mapping the repository|idle \(limit/i.test(
+    text,
+  );
+}
+
+/** Permanent messages = agent replies (+ rare notices). Thinking/tools/actions collapse to one live line. */
+function buildFeed(events: JedocEvent[]): { messages: Message[]; live: LiveLine | null } {
+  const messages: Message[] = [];
   let assistant = "";
   let assistantKey = "";
+  let live: LiveLine | null = null;
 
   const flushAssistant = () => {
     if (!assistant.trim()) {
@@ -35,141 +54,131 @@ function buildFeed(events: JedocEvent[]): FeedItem[] {
       assistantKey = "";
       return;
     }
-    items.push({
-      key: assistantKey || `assistant-${items.length}`,
-      kind: "markdown",
-      tone: toneFor("assistant"),
+    messages.push({
+      key: assistantKey || `assistant-${messages.length}`,
+      kind: "assistant",
       label: "assistant",
       body: assistant,
+      tone: toneFor("assistant"),
     });
     assistant = "";
     assistantKey = "";
   };
 
+  const setLive = (label: string, body: string, toneKind: string) => {
+    const text = body.trim();
+    if (!text) return;
+    live = { label, body: text, tone: toneFor(toneKind) };
+  };
+
   events.forEach((event, index) => {
     if (event.type === "stream") {
       const kind = event.kind || "log";
-      const text = (event.text || event.detail || "").trimEnd();
+      const text = event.text || event.detail || "";
       if (kind === "assistant") {
         if (!assistantKey) assistantKey = `assistant-${event.id || index}`;
         assistant += text;
+        live = null;
         return;
       }
       flushAssistant();
-      if (kind === "session") {
-        if (text) items.push({ key: `s-${index}`, kind: "meta", tone: toneFor(kind), label: "session", body: text });
-        return;
-      }
       if (kind === "thinking") {
-        items.push({
-          key: `t-${index}`,
-          kind: "meta",
-          tone: toneFor(kind),
-          label: "thinking",
-          body: text || "…",
-        });
+        setLive("thinking", text || "…", "thinking");
         return;
       }
       if (kind === "shell") {
-        items.push({
-          key: `sh-${index}`,
-          kind: "code",
-          tone: toneFor(kind),
-          label: "$",
-          body: text || event.name || "shell",
-        });
+        setLive("$", text || event.name || "shell", "shell");
         return;
       }
       if (kind === "tool_call" || kind === "mcp") {
-        items.push({
-          key: `tool-${index}`,
-          kind: "meta",
-          tone: toneFor(kind),
-          label: kind === "mcp" ? `mcp ${event.name || "tool"}` : event.name || "tool",
-          body: text,
-        });
+        const label = kind === "mcp" ? `mcp ${event.name || "tool"}` : event.name || "tool";
+        setLive(label, text || event.subtype || "…", kind);
+        return;
+      }
+      if (kind === "session") {
+        setLive("session", text, "system");
         return;
       }
       if (kind === "system") {
-        items.push({
-          key: `sys-${index}`,
-          kind: looksLikeMarkdown(text) ? "markdown" : "meta",
-          tone: toneFor(event.level === "error" ? "error" : kind),
-          label: event.level === "error" ? "error" : "system",
+        if (event.level === "error") {
+          messages.push({
+            key: `err-${event.id || index}`,
+            kind: "notice",
+            label: "error",
+            body: text,
+            tone: toneFor("error"),
+          });
+          live = null;
+          return;
+        }
+        if (isEphemeralSystem(text)) {
+          setLive("status", text, "system");
+          return;
+        }
+        // Durable system notes (restart, circuit heal, etc.) stay readable.
+        messages.push({
+          key: `sys-${event.id || index}`,
+          kind: "notice",
+          label: "system",
           body: text,
+          tone: toneFor("system"),
         });
         return;
       }
-      if (text) {
-        items.push({
-          key: `x-${index}`,
-          kind: looksLikeMarkdown(text) ? "markdown" : "meta",
-          tone: toneFor(kind),
-          label: kind,
-          body: text,
-        });
-      }
+      if (text.trim()) setLive(kind, text, kind);
       return;
     }
 
     flushAssistant();
     if (event.type === "qa_progress") {
-      items.push({
-        key: `qa-${index}`,
-        kind: "meta",
-        tone: "text-sky",
-        label: "qa",
-        body: event.action || "",
-      });
+      setLive("qa", event.action || "", "system");
       return;
     }
     if (event.type === "node_status") {
-      items.push({
-        key: `node-${index}`,
-        kind: "meta",
-        tone: toneFor(event.status || ""),
-        label: event.node_id || "node",
-        body: `${event.status || ""}  ${event.action || ""}`.trim(),
-      });
+      setLive(event.node_id || "node", `${event.status || ""}  ${event.action || ""}`.trim(), event.status || "system");
       return;
     }
     if (event.type === "feature_status") {
+      const status = event.status || "";
+      if (status === "running") {
+        setLive("feature", "running", status);
+        return;
+      }
       const err = (event.error || "").trim();
       const bodyErr =
-        err.includes("GraphInterrupt") && !err.includes("database is locked")
-          ? "Paused for approval."
-          : err;
-      items.push({
-        key: `feat-${index}`,
-        kind: bodyErr.includes("\n") ? "code" : bodyErr && looksLikeMarkdown(bodyErr) ? "markdown" : "meta",
-        tone: toneFor(event.status || ""),
+        err.includes("GraphInterrupt") && !err.includes("database is locked") ? "Paused for approval." : err;
+      messages.push({
+        key: `feat-${event.id || index}`,
+        kind: "notice",
         label: "feature",
-        body: `${event.status || ""}${bodyErr ? `\n${bodyErr}` : ""}`.trim(),
+        body: `${status}${bodyErr ? `\n${bodyErr}` : ""}`.trim(),
+        tone: toneFor(status),
       });
+      live = null;
       return;
     }
     if (event.type === "audit_card") {
-      items.push({
-        key: `audit-${index}`,
-        kind: "meta",
-        tone: "text-amber",
-        label: `audit ${event.severity}`,
-        body: `${event.table} ${event.check}: ${event.detail || ""}`,
-      });
+      setLive(`audit ${event.severity}`, `${event.table} ${event.check}: ${event.detail || ""}`, "system");
       return;
     }
     if (event.type === "artifact" && event.content) {
-      items.push({
-        key: `art-${index}`,
-        kind: "markdown",
-        tone: "text-paper",
-        label: event.name || "artifact",
-        body: String(event.content),
-      });
+      // Artifacts stay in the inspector; don't dump them into the stream.
+      setLive("artifact", event.name || "saved", "system");
     }
   });
-  flushAssistant();
-  return items;
+
+  // Keep an in-progress assistant reply as a real message so it can be read while streaming.
+  if (assistant.trim()) {
+    messages.push({
+      key: assistantKey || `assistant-live`,
+      kind: "assistant",
+      label: "assistant",
+      body: assistant,
+      tone: toneFor("assistant"),
+    });
+  }
+
+  return { messages, live };
 }
 
 function MarkdownBody({ text }: { text: string }) {
@@ -214,24 +223,45 @@ function MarkdownBody({ text }: { text: string }) {
   );
 }
 
-const STICK_BOTTOM_PX = 80;
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-6 px-2 font-mono text-[10px] text-muted hover:text-paper"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+    >
+      {copied ? "Copied" : "Copy"}
+    </Button>
+  );
+}
 
-export function StreamPanel({ events, epoch }: { events: JedocEvent[]; epoch: number }) {
+const STICK_BOTTOM_PX = 96;
+
+export function StreamPanel({ events }: { events: JedocEvent[]; epoch?: number }) {
   const scroller = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
-  const feed = useMemo(() => buildFeed(events), [events]);
+  const { messages, live } = useMemo(() => buildFeed(events), [events]);
+  const lastAssistantLen = messages.filter((item) => item.kind === "assistant").at(-1)?.body.length ?? 0;
 
   useEffect(() => {
     const node = scroller.current;
     if (!node || !stickToBottom.current) return;
     node.scrollTop = node.scrollHeight;
-  }, [epoch, feed.length]);
+  }, [messages.length, lastAssistantLen, live?.body]);
 
   return (
     <div className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-line">
       <div className="flex shrink-0 items-center justify-between border-b border-line px-3 py-1.5">
         <span className="font-mono text-[10px] uppercase tracking-wider text-muted">Live agent stream</span>
-        <span className="font-mono text-[10px] text-muted">{events.length} events</span>
+        <span className="font-mono text-[10px] text-muted">{messages.length} messages</span>
       </div>
       <div
         ref={scroller}
@@ -243,16 +273,17 @@ export function StreamPanel({ events, epoch }: { events: JedocEvent[]; epoch: nu
         }}
       >
         <div className="space-y-2 px-3 py-3">
-          {feed.length === 0 && (
+          {messages.length === 0 && !live && (
             <p className="font-mono text-[11px] text-muted">Waiting for agent activity…</p>
           )}
-          {feed.map((item) => (
+          {messages.map((item) => (
             <article key={item.key} className="rounded border border-line/70 bg-panel/40 px-2.5 py-2">
-              <div className={`mb-1 font-mono text-[10px] uppercase tracking-wider ${item.tone}`}>{item.label}</div>
-              {item.kind === "markdown" ? (
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <div className={`font-mono text-[10px] uppercase tracking-wider ${item.tone}`}>{item.label}</div>
+                {item.kind === "assistant" && <CopyButton text={item.body} />}
+              </div>
+              {item.kind === "assistant" || looksLikeMarkdown(item.body) ? (
                 <MarkdownBody text={item.body} />
-              ) : item.kind === "code" ? (
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-mint">{item.body}</pre>
               ) : (
                 <p className={`whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed ${item.tone}`}>
                   {item.body}
@@ -262,6 +293,14 @@ export function StreamPanel({ events, epoch }: { events: JedocEvent[]; epoch: nu
           ))}
         </div>
       </div>
+      {live && (
+        <div className="shrink-0 border-t border-line bg-panel2/80 px-3 py-2">
+          <div className={`font-mono text-[10px] uppercase tracking-wider ${live.tone}`}>{live.label}</div>
+          <p className={`mt-0.5 line-clamp-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed ${live.tone}`}>
+            {live.body}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

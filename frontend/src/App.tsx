@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Connection } from "@xyflow/react";
 import { api } from "./api";
 import { AgentDialog } from "./components/AgentDialog";
@@ -21,6 +21,7 @@ import { SkillsView } from "./components/SkillsView";
 import { StreamPanel } from "./components/StreamPanel";
 import { TargetBar } from "./components/TargetBar";
 import { TopologyCanvas } from "./components/TopologyCanvas";
+import { armNotifySounds, playFeatureStatusSound } from "./lib/notifySounds";
 import type { AgentInfo, AuditCard, Feature, Flow, GitProject, GitRepo, JedocEvent, ProviderAccount, QaProgress, Session, Skill, Telemetry, Turn } from "./types";
 
 const EMPTY_FLOW: Flow = {
@@ -40,7 +41,6 @@ export function App() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [agent, setAgent] = useState<AgentInfo | null>(null);
   const [events, setEvents] = useState<JedocEvent[]>([]);
-  const [epoch, setEpoch] = useState(0);
   const [nodeId, setNodeId] = useState<string | null>(null);
   const [nodeMenu, setNodeMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [edgeId, setEdgeId] = useState<string | null>(null);
@@ -68,9 +68,11 @@ export function App() {
   const [dockHeight, setDockHeight] = useState(220);
   const [layoutKey, setLayoutKey] = useState(1);
   const [browsing, setBrowsing] = useState(false);
+  const statusWatchRef = useRef<{ featureId: string; status: string }>({ featureId: "", status: "" });
 
   function enterApp() {
     window.localStorage.setItem("jedoc.entered", "1");
+    armNotifySounds();
     setScreen("app");
     setLayoutKey((value) => value + 1);
   }
@@ -121,6 +123,7 @@ export function App() {
   }
 
   useEffect(() => {
+    armNotifySounds();
     void (async () => {
       try {
         const [flowList, featureList, skillList, agentInfo, projectPayload, providerList] = await Promise.all([
@@ -154,7 +157,6 @@ export function App() {
       const event = JSON.parse(message.data) as JedocEvent;
       if (event.type === "hello") {
         setEvents(event.events ?? []);
-        setEpoch((value) => value + 1);
         if (event.feature) {
           setFeature((current) =>
             current
@@ -166,13 +168,33 @@ export function App() {
       }
       setEvents((current) => [...current.slice(-700), event]);
       if (event.type === "feature_status") {
-        setFeature((current) => (current ? { ...current, status: event.status || current.status, error: event.error || "" } : current));
-        void api<Feature>(`/api/features/${feature.id}`).then(setFeature).catch(() => undefined);
-        void api<Feature[]>("/api/features").then(setFeatures).catch(() => undefined);
+        playFeatureStatusSound(event.status);
+        // Patch locally — avoid refetch/remount that jumps the stream while you're reading.
+        setFeature((current) =>
+          current ? { ...current, status: event.status || current.status, error: event.error || "" } : current,
+        );
+        setFeatures((list) =>
+          list.map((item) =>
+            item.id === feature.id
+              ? { ...item, status: event.status || item.status, error: event.error || "" }
+              : item,
+          ),
+        );
       }
     };
     return () => socket.close();
   }, [feature?.id]);
+
+  // Backup: play when status flips even if the WS event was missed (API poll / hello merge).
+  useEffect(() => {
+    if (!feature?.id) return;
+    const status = feature.status || "";
+    const prev = statusWatchRef.current;
+    if (prev.featureId === feature.id && prev.status && prev.status !== status) {
+      playFeatureStatusSound(status);
+    }
+    statusWatchRef.current = { featureId: feature.id, status };
+  }, [feature?.id, feature?.status]);
 
   useEffect(() => {
     if (!feature?.project_path) return;
@@ -202,8 +224,10 @@ export function App() {
   }, [projectPath]);
 
   useEffect(() => {
+    // Remount the canvas only when chrome panes change size — not when the stream dock opens,
+    // or live agent updates would wipe scroll/selection while you're reading.
     setLayoutKey((value) => value + 1);
-  }, [railOpen, inspectorOpen, dockOpen, screen, chatOpen]);
+  }, [railOpen, inspectorOpen, screen, chatOpen]);
 
   useEffect(() => {
     if (feature?.status === "running" || feature?.status === "paused") {
@@ -297,7 +321,7 @@ export function App() {
           <Button variant="outline" size="sm" onClick={() => setDialog(true)} type="button">
             New feature
           </Button>
-          {feature && (feature.status === "draft" || feature.status === "failed") && (
+          {feature?.status === "draft" && (
             <Button
               size="sm"
               onClick={() =>
@@ -309,7 +333,7 @@ export function App() {
               }
               type="button"
             >
-              {feature.status === "failed" ? "Restart from start" : "Start pipeline"}
+              Start pipeline
             </Button>
           )}
           {feature?.status === "failed" && (
@@ -320,7 +344,9 @@ export function App() {
                 void guard(async () => {
                   await api(`/api/features/${feature.id}/resume`, {
                     method: "POST",
-                    body: JSON.stringify({ note: "Resumed after failure." }),
+                    body: JSON.stringify({
+                      note: "Resumed after failure — clear circuit and continue from architect if needed.",
+                    }),
                   });
                   await selectFeature(feature.id);
                   setFeatures(await api<Feature[]>("/api/features"));
@@ -328,25 +354,115 @@ export function App() {
               }
               type="button"
             >
-              Resume checkpoint
+              Resume after failure
+            </Button>
+          )}
+          {feature?.status === "running" && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-amber/50 text-amber"
+                onClick={() =>
+                  void guard(async () => {
+                    await api(`/api/features/${feature.id}/pause`, { method: "POST" });
+                    await selectFeature(feature.id);
+                    setFeatures(await api<Feature[]>("/api/features"));
+                  })
+                }
+                type="button"
+              >
+                Pause
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void guard(async () => {
+                    await api(`/api/features/${feature.id}/skip`, {
+                      method: "POST",
+                      body: JSON.stringify({ agent_id: nodeId || undefined }),
+                    });
+                    await selectFeature(feature.id);
+                    setFeatures(await api<Feature[]>("/api/features"));
+                  })
+                }
+                type="button"
+              >
+                Skip agent
+              </Button>
+            </>
+          )}
+          {(feature?.status === "paused" || feature?.status === "failed") && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                void guard(async () => {
+                  await api(`/api/features/${feature.id}/skip`, {
+                    method: "POST",
+                    body: JSON.stringify({ agent_id: nodeId || undefined }),
+                  });
+                  await selectFeature(feature.id);
+                  setFeatures(await api<Feature[]>("/api/features"));
+                })
+              }
+              type="button"
+            >
+              Skip agent
             </Button>
           )}
           {feature?.status === "paused" && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void guard(async () => {
+                    await api(`/api/features/${feature.id}/resume`, {
+                      method: "POST",
+                      body: JSON.stringify({ note: "Resumed after pause." }),
+                    });
+                    await selectFeature(feature.id);
+                    setFeatures(await api<Feature[]>("/api/features"));
+                  })
+                }
+                type="button"
+              >
+                Resume
+              </Button>
+              <Button
+                size="sm"
+                onClick={() =>
+                  void guard(async () => {
+                    await api(`/api/features/${feature.id}/approve`, {
+                      method: "POST",
+                      body: JSON.stringify({ note: "Approved from the header." }),
+                    });
+                    await selectFeature(feature.id);
+                    setFeatures(await api<Feature[]>("/api/features"));
+                  })
+                }
+                type="button"
+              >
+                Approve & Resume
+              </Button>
+            </>
+          )}
+          {feature && feature.status !== "archived" && feature.status !== "draft" && (
             <Button
               size="sm"
+              variant="outline"
               onClick={() =>
                 void guard(async () => {
-                  await api(`/api/features/${feature.id}/approve`, {
-                    method: "POST",
-                    body: JSON.stringify({ note: "Approved from the header." }),
-                  });
+                  await api(`/api/features/${feature.id}/restart`, { method: "POST" });
                   await selectFeature(feature.id);
                   setFeatures(await api<Feature[]>("/api/features"));
                 })
               }
               type="button"
             >
-              Approve & Resume
+              Start over from PRD
             </Button>
           )}
           {feature && feature.status !== "archived" && (
@@ -649,7 +765,7 @@ export function App() {
                 </div>
                 <div className="grid min-h-0 flex-1 grid-cols-[1.45fr_0.8fr] overflow-hidden">
                   <div className="min-h-0 min-w-0 overflow-hidden">
-                    <StreamPanel events={events} epoch={epoch} />
+                    <StreamPanel events={events} />
                   </div>
                   <div className="min-h-0 min-w-0 overflow-hidden">
                     <QaPanel progress={derived.progress} cards={derived.cards} />
@@ -696,6 +812,7 @@ export function App() {
           name={flow.nodes.find((node) => node.id === nodeMenu.id)?.display_name || "Agent"}
           enabled={flow.nodes.find((node) => node.id === nodeMenu.id)?.enabled !== false}
           canDelete={!locked && flow.nodes.length > 1}
+          canSkip={Boolean(feature && ["running", "paused", "failed"].includes(feature.status))}
           onEdit={() => {
             selectNode(nodeMenu.id);
             setNodeMenu(null);
@@ -703,6 +820,19 @@ export function App() {
           onToggle={() => {
             const node = flow.nodes.find((item) => item.id === nodeMenu.id);
             void setNodeEnabled(nodeMenu.id, node?.enabled === false);
+          }}
+          onSkip={() => {
+            const id = nodeMenu.id;
+            setNodeMenu(null);
+            if (!feature) return;
+            void guard(async () => {
+              await api(`/api/features/${feature.id}/skip`, {
+                method: "POST",
+                body: JSON.stringify({ agent_id: id }),
+              });
+              await selectFeature(feature.id);
+              setFeatures(await api<Feature[]>("/api/features"));
+            });
           }}
           onDelete={() => void removeNode(nodeMenu.id)}
           onClose={() => setNodeMenu(null)}

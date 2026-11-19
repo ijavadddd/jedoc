@@ -72,7 +72,7 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
         node.setdefault("enabled_skills", [])
         node.setdefault("model", "")
         node.setdefault("provider", "cursor")
-        node.setdefault("timeout_s", 600)
+        node.setdefault("timeout_s", 1800)
         node.setdefault("max_retries", 3)
         node.setdefault("require_approval_before", False)
         node.setdefault("approve_every_entry", False)

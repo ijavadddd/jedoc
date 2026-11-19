@@ -19,11 +19,20 @@ from backend.engine.templates import OUTPUT_CONTRACT
 from backend.engine.workspace import diff_stat, enforce_scope, file_delta, file_stats, git_snapshot, relative_path
 from backend.events import EventBus
 from backend.marketplace.manager import SkillManager
-from backend.providers.cursor_cli import CursorCLIChatModel, create_chat
+from backend.providers.cursor_cli import CursorCLIChatModel, CursorCLIError, create_chat, is_cli_timeout
 from backend.storage.session_store import FeatureSessionStore
 
 WRITE_ROLES = {"tdd", "implementer", "custom"}
 MODEL_ROLES = {"architect", "tdd", "implementer", "reviewer", "qa_auditor", "custom"}
+# Idle budgets below these floors kill long Cursor turns that are still streaming tools.
+ROLE_TIMEOUT_FLOOR_S = {
+    "architect": 900,
+    "tdd": 900,
+    "implementer": 1800,
+    "reviewer": 1800,
+    "qa_auditor": 1800,
+    "custom": 900,
+}
 
 
 def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager, bus: EventBus):
@@ -119,6 +128,10 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
         model_name = default_model_override() or node.get("model") or ""
         cli_env = store.provider_credentials(node.get("provider") or "cursor")
         await _status(bus, feature_id, node, "RUNNING", chat["id"], "Launching Cursor agent…", started)
+        timeout_s = max(
+            int(node.get("timeout_s") or 900),
+            ROLE_TIMEOUT_FLOOR_S.get(role, 900),
+        )
         model = CursorCLIChatModel(
             model_name=model_name,
             mode=node.get("cursor_mode") or "agent",
@@ -126,13 +139,26 @@ def make_executor(node_id: str, store: FeatureSessionStore, skills: SkillManager
             chat_id=chat["id"],
             feature_id=feature_id,
             agent_id=node_id,
-            timeout_s=int(node.get("timeout_s") or 900),
+            timeout_s=timeout_s,
             force=role in WRITE_ROLES,
             sink=sink,
             cli_env=cli_env,
         )
-        result = await model.ainvoke([HumanMessage(content=prompt)])
-        text = result.content if isinstance(result.content, str) else json.dumps(result.content)
+        try:
+            result = await model.ainvoke([HumanMessage(content=prompt)])
+            text = result.content if isinstance(result.content, str) else json.dumps(result.content)
+        except CursorCLIError as exc:
+            # Idle/hard timeouts become a FAIL verdict so max_retries can recover instead of killing the feature.
+            if not is_cli_timeout(exc):
+                raise
+            text = (
+                f"Cursor agent timed out on `{node_id}`.\n{exc}\n\n"
+                "VERDICT: FAIL\n"
+            )
+            await bus.publish(
+                feature_id,
+                {"type": "stream", "kind": "system", "level": "error", "node_id": node_id, "text": str(exc)},
+            )
         if model.chat_id and model.chat_id != chat["id"]:
             store.set_agent_chat_id(feature_id, node_id, model.chat_id)
             chat["id"] = model.chat_id
@@ -242,24 +268,64 @@ async def _gate(state, flow, node, store, bus, started) -> dict[str, Any]:
 
 def _route(flow: dict, node: dict, verdict: str, state: dict) -> tuple[str, dict, str]:
     role = node.get("role_type")
-    if role == "reviewer":
-        route = "on_pass" if verdict == "PASS" else "on_fail"
-    elif role == "qa_auditor":
+    if role in {"reviewer", "qa_auditor"}:
         route = {"PASS": "on_pass", "FAIL": "on_fail", "SCALE_ISSUE": "on_scale_issue"}.get(verdict, "on_fail")
     else:
         route = "on_pass"
     retries = dict(state.get("retry_counts") or {})
     error = ""
     if route in {"on_fail", "on_scale_issue"}:
+        # Count failures on the rejecting node so a stuck review↔fix loop cannot run forever
+        # when the implementer step is skipped or the checkpoint does not advance.
+        source_id = node["id"]
+        retries[source_id] = int(retries.get(source_id, 0)) + 1
+        source_max = int(node.get("max_retries", 3))
+        if retries[source_id] > source_max:
+            # Prefer reopening PRD/architecture over killing the feature.
+            escalated = _escalate_to_architect(flow, node, retries)
+            if escalated is not None:
+                return escalated
+            route = "circuit_open"
+            error = f"Circuit breaker opened for {source_id} after {source_max} retries"
+            return route, retries, error
         target = _target(flow, node["id"], route)
         if target:
             retries[target] = int(retries.get(target, 0)) + 1
             spec = next(item for item in flow["nodes"] if item["id"] == target)
             maximum = int(spec.get("max_retries", 3))
             if retries[target] > maximum:
+                escalated = _escalate_to_architect(flow, node, retries)
+                if escalated is not None:
+                    return escalated
                 route = "circuit_open"
                 error = f"Circuit breaker opened for {target} after {maximum} retries"
     return route, retries, error
+
+
+def _escalate_to_architect(flow: dict, node: dict, retries: dict) -> tuple[str, dict, str] | None:
+    """Send the pipeline back to PRD/architecture when implementer loops are exhausted."""
+    architect = _target(flow, node["id"], "on_scale_issue")
+    if not architect:
+        architect = str(flow.get("entry") or "") or None
+    if not architect:
+        return None
+    # Fresh implementer/reviewer budget after the architect revises the spec.
+    retries[node["id"]] = 0
+    retries[architect] = int(retries.get(architect, 0)) + 1
+    spec = next((item for item in flow["nodes"] if item["id"] == architect), None)
+    maximum = int((spec or {}).get("max_retries", 5))
+    if retries[architect] > maximum:
+        return (
+            "circuit_open",
+            retries,
+            f"Circuit breaker opened for {architect} after {maximum} architecture escalations",
+        )
+    # Prefer the explicit scale edge when present so LangGraph routing stays valid.
+    if _target(flow, node["id"], "on_scale_issue"):
+        return "on_scale_issue", retries, ""
+    # Fall back: treat as fail routed to entry by rewriting route via a synthetic pass — callers
+    # need an edge; without on_scale_issue, circuit is safer.
+    return None
 
 
 def _target(flow: dict, source: str, condition: str) -> str | None:

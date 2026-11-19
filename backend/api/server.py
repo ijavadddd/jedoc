@@ -47,6 +47,10 @@ class ApproveIn(BaseModel):
     note: str = ""
 
 
+class SkipIn(BaseModel):
+    agent_id: str | None = None
+
+
 class FlowIn(BaseModel):
     definition: dict[str, Any]
 
@@ -509,17 +513,28 @@ def create_app() -> FastAPI:
     async def start_feature(feature_id: str):
         feature = _require_feature(app, feature_id)
         if feature["status"] == "paused":
-            raise HTTPException(409, "Feature is waiting for approval. Use approve or resume.")
+            raise HTTPException(409, "Feature is waiting for approval. Use approve, resume, or restart.")
         if feature["status"] in {"running", "archived", "completed"}:
             raise HTTPException(409, f"Cannot start a feature that is {feature['status']}")
         if feature["status"] == "failed":
             # Fresh start from the beginning — use /resume to continue a checkpoint after a crash.
+            app.state.store.archive_active_sessions(feature_id)
             app.state.store.update_feature(feature_id, thread_id=new_thread_id(), error="")
         try:
             app.state.runner.launch(feature_id, resume=False)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"status": "running", "feature_id": feature_id}
+
+    @app.post("/api/features/{feature_id}/restart", status_code=202)
+    async def restart_feature(feature_id: str):
+        """Stop any live run, reset checkpoint + agent chats, and start again from the PRD/entry agent."""
+        _require_feature(app, feature_id)
+        try:
+            feature = await app.state.runner.restart_from_start(feature_id)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"status": "running", "feature_id": feature_id, "feature": feature}
 
     @app.post("/api/features/{feature_id}/approve", status_code=202)
     async def approve_feature(feature_id: str, body: ApproveIn):
@@ -531,6 +546,26 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
         return {"status": "running", "feature_id": feature_id}
+
+    @app.post("/api/features/{feature_id}/pause", status_code=202)
+    async def pause_feature(feature_id: str):
+        """Stop a live run without archiving; Resume continues from the checkpoint."""
+        _require_feature(app, feature_id)
+        try:
+            feature = await app.state.runner.pause(feature_id)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"status": feature.get("status") if feature else "paused", "feature_id": feature_id, "feature": feature}
+
+    @app.post("/api/features/{feature_id}/skip", status_code=202)
+    async def skip_feature_agent(feature_id: str, body: SkipIn = Body(default_factory=SkipIn)):
+        """Skip the current or named agent (treat as PASS) and continue the pipeline."""
+        _require_feature(app, feature_id)
+        try:
+            feature = await app.state.runner.skip_agent(feature_id, body.agent_id)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"status": "running", "feature_id": feature_id, "feature": feature}
 
     @app.post("/api/features/{feature_id}/resume", status_code=202)
     async def resume_feature(feature_id: str, body: ApproveIn = Body(default_factory=ApproveIn)):

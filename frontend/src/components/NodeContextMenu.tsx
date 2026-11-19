@@ -8,8 +8,10 @@ interface Props {
   name: string;
   enabled: boolean;
   canDelete: boolean;
+  canSkip: boolean;
   onEdit: () => void;
   onToggle: () => void;
+  onSkip: () => void;
   onDelete: () => void;
   onClose: () => void;
 }
@@ -27,6 +29,13 @@ export function NodeContextMenu(props: Props) {
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={props.onEdit}>Edit agent</DropdownMenuItem>
         <DropdownMenuItem onSelect={props.onToggle}>{props.enabled ? "Disable agent" : "Enable agent"}</DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!props.canSkip}
+          title={props.canSkip ? "Mark this agent PASS and continue" : "Start or resume the feature to skip an agent"}
+          onSelect={props.onSkip}
+        >
+          Skip agent
+        </DropdownMenuItem>
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
           disabled={!props.canDelete}

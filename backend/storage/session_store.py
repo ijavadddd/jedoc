@@ -557,8 +557,8 @@ class FeatureSessionStore:
                 session.refresh(row)
                 return self._session_dict(row)
 
-    def archive_feature_sessions(self, feature_id: str) -> list[dict[str, Any]]:
-        """Mark-done gate. Archives every active chat for the feature. Does not delete rows."""
+    def archive_active_sessions(self, feature_id: str) -> list[dict[str, Any]]:
+        """Archive every active agent chat without changing the feature status."""
         with self._lock:
             with self._session() as session:
                 rows = session.scalars(
@@ -573,11 +573,19 @@ class FeatureSessionStore:
                     row.status = "archived"
                     row.archived_at = now
                     archived.append(self._session_dict(row))
+                session.commit()
+                return archived
+
+    def archive_feature_sessions(self, feature_id: str) -> list[dict[str, Any]]:
+        """Mark-done gate. Archives every active chat for the feature. Does not delete rows."""
+        archived = self.archive_active_sessions(feature_id)
+        with self._lock:
+            with self._session() as session:
                 feature = session.get(FeatureRow, feature_id)
                 if feature is not None:
                     feature.status = "archived"
-                    feature.updated_at = now
-                session.commit()
+                    feature.updated_at = utcnow()
+                    session.commit()
                 return archived
 
     def set_agent_chat_id(self, feature_id: str, agent_id: str, chat_id: str) -> None:
